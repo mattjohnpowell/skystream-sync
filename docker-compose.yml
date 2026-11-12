@@ -9,4 +9,3 @@ services:
       DATA_DIR: /app/data
     volumes:
       - ./data:/app/data
-# On the VPS, Caddy: sync.powellmatt.com { reverse_proxy 127.0.0.1:8787 }
