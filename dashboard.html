@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SkyStream Profile Sync</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --danger: #f85149;
+      --ok: #3fb950;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+    header {
+      display: flex; flex-wrap: wrap; align-items: center;
+      justify-content: space-between; gap: 12px; margin-bottom: 24px;
+    }
+    h1 { font-size: 1.35rem; margin: 0; }
+    .muted { color: var(--muted); font-size: 0.9rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px; margin-bottom: 16px;
+    }
+    .login-box { max-width: 380px; margin: 48px auto; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
+    input {
+      width: 100%; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+      font-size: 0.95rem;
+    }
+    button {
+      padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border);
+      background: #21262d; color: var(--text); cursor: pointer; font-size: 0.9rem;
+    }
+    button.primary {
+      background: #1f6feb; border-color: #388bfd; font-weight: 600;
+    }
+    button:hover { filter: brightness(1.1); }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .error { color: var(--danger); font-size: 0.9rem; margin-top: 10px; min-height: 1.2em; }
+    .stats {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px; margin-bottom: 16px;
+    }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    .stat .num { font-size: 1.5rem; font-weight: 700; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .tabs button.active { background: #1f6feb; border-color: #388bfd; }
+    .list { display: grid; gap: 8px; }
+    .item {
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+      background: var(--bg);
+    }
+    .item-title { font-weight: 600; word-break: break-word; }
+    .item-sub { color: var(--muted); font-size: 0.85rem; word-break: break-all; }
+    pre {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; overflow: auto; max-height: 520px; font-size: 0.82rem; margin: 0;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>SkyStream Profile Sync</h1>
+        <div class="muted" id="subtitle">Self-hosted sync server</div>
+      </div>
+      <div class="row hidden" id="toolbar">
+        <button id="refreshBtn">Refresh</button>
+        <button id="downloadBtn">Download JSON</button>
+        <button id="logoutBtn">Sign out</button>
+      </div>
+    </header>
+
+    <div class="card login-box" id="loginCard">
+      <h2 style="margin-top:0;font-size:1.1rem;">Sign in to view your synced data</h2>
+      <p class="muted" style="margin-top:0;">Use the same username and password you use in SkyStream.</p>
+      <form id="loginForm">
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" minlength="2" required />
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" minlength="6" required />
+        <div class="row" style="margin-top:16px;">
+          <button type="submit" class="primary" style="width:100%;">Sign in</button>
+        </div>
+        <div class="error" id="loginError"></div>
+      </form>
+    </div>
+
+    <div id="dashboard" class="hidden">
+      <div class="stats" id="stats"></div>
+      <div class="tabs" id="tabs">
+        <button data-tab="history" class="active">Watch History</button>
+        <button data-tab="library">Library</button>
+        <button data-tab="extensions">Extensions &amp; Repos</button>
+        <button data-tab="episodes">Episode Overrides</button>
+        <button data-tab="raw">Raw JSON</button>
+      </div>
+      <div class="card">
+        <div id="panel"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN_KEY = 'skystream_sync_token';
+    const USER_KEY = 'skystream_sync_user';
+    let profile = {};
+    let activeTab = 'history';
+
+    const $ = (id) => document.getElementById(id);
+
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined && text !== null) node.textContent = String(text);
+      return node;
+    }
+
+    function fmtTime(ms) {
+      if (!ms) return 'Never';
+      const d = new Date(Number(ms));
+      return Number.isNaN(d.getTime()) ? String(ms) : d.toLocaleString();
+    }
+
+    function fmtDuration(ms) {
+      const totalSec = Math.floor((Number(ms) || 0) / 1000);
+      if (totalSec <= 0) return '0:00';
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      const pad = (n) => String(n).padStart(2, '0');
+      return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+    }
+
+    function showLogin(msg = '') {
+      $('loginCard').classList.remove('hidden');
+      $('dashboard').classList.add('hidden');
+      $('toolbar').classList.add('hidden');
+      $('subtitle').textContent = 'Self-hosted sync server';
+      $('loginError').textContent = msg;
+    }
+
+    async function loadProfile() {
+      const token = localStorage.getItem(TOKEN_KEY);
+      const user = localStorage.getItem(USER_KEY) || '';
+      if (!token) { showLogin(); return; }
+
+      const res = await fetch('/v1/profile', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        showLogin('Session expired. Please sign in again.');
+        return;
+      }
+      if (!res.ok) {
+        showLogin('Could not load profile from server.');
+        return;
+      }
+
+      profile = await res.json();
+      $('loginCard').classList.add('hidden');
+      $('dashboard').classList.remove('hidden');
+      $('toolbar').classList.remove('hidden');
+      $('subtitle').textContent = `Signed in as ${user} • Last synced: ${fmtTime(profile.updatedAt)}`;
+      renderStats();
+      renderTab();
+    }
+
+    function renderStats() {
+      const stats = [
+        ['History entries', (profile.history || []).length],
+        ['Library items', (profile.library || []).length],
+        ['Episode overrides', Object.keys(profile.episodeOverrides || {}).length],
+        ['SkyStream plugins', (profile.skystreamPlugins || []).length],
+        ['CloudStream plugins', (profile.cloudstreamPlugins || []).length],
+        ['Stremio add-ons', (profile.stremioAddons || []).length],
+      ];
+      const root = $('stats');
+      root.replaceChildren();
+      for (const [label, value] of stats) {
+        const card = el('div', 'stat');
+        card.appendChild(el('div', 'num', value));
+        card.appendChild(el('div', 'muted', label));
+        root.appendChild(card);
+      }
+    }
+
+    function renderTab() {
+      const panel = $('panel');
+      panel.replaceChildren();
+
+      if (activeTab === 'history') {
+        const rows = [...(profile.history || [])].sort(
+          (a, b) => (b?.entry?.timestamp || 0) - (a?.entry?.timestamp || 0),
+        );
+        if (!rows.length) { panel.appendChild(el('div', 'muted', 'No watch history synced yet.')); return; }
+        const list = el('div', 'list');
+        for (const row of rows) {
+          const entry = row.entry || {};
+          const item = el('div', 'item');
+          const title = entry.title || entry.name || row.key;
+          const pos = entry.position ? ` • Position ${fmtDuration(entry.position)}` : '';
+          const ep = entry.episodeName || (entry.episode ? `Episode ${entry.episode}` : '');
+          item.appendChild(el('div', 'item-title', `${title}${ep ? ' — ' + ep : ''}`));
+          item.appendChild(el('div', 'item-sub', `${fmtTime(entry.timestamp)}${pos} • key: ${row.key}`));
+          list.appendChild(item);
+        }
+        panel.appendChild(list);
+        return;
+      }
+
+      if (activeTab === 'library') {
+        const items = profile.library || [];
+        if (!items.length) { panel.appendChild(el('div', 'muted', 'No library bookmarks synced yet.')); return; }
+        const list = el('div', 'list');
+        for (const entry of items) {
+          const item = el('div', 'item');
+          item.appendChild(el('div', 'item-title', entry.title || entry.url));
+          item.appendChild(el('div', 'item-sub', `${entry.provider || ''} ${entry.url || ''}`.trim()));
+          list.appendChild(item);
+        }
+        panel.appendChild(list);
+        return;
+      }
+
+      if (activeTab === 'extensions') {
+        const sections = [
+          ['SkyStream Repositories', (profile.skystreamRepos || []).map((u) => [u, ''])],
+          ['SkyStream Plugins', (profile.skystreamPlugins || []).map((p) => [p.packageName, p.repositoryUrl || ''])],
+          ['CloudStream Repositories', (profile.cloudstreamRepos || []).map((u) => [u, ''])],
+          ['CloudStream Plugins', (profile.cloudstreamPlugins || []).map((p) => [p.name || p.internalName, p.repositoryUrl || ''])],
+          ['Nuvio Repositories', (profile.nuvioRepos || []).map((u) => [u, ''])],
+          ['Stremio Add-ons', (profile.stremioAddons || []).map((u) => [u, ''])],
+        ];
+        const list = el('div', 'list');
+        for (const [heading, rows] of sections) {
+          const box = el('div', 'item');
+          box.appendChild(el('div', 'item-title', `${heading} (${rows.length})`));
+          if (!rows.length) {
+            box.appendChild(el('div', 'item-sub', 'None'));
+          } else {
+            for (const [main, sub] of rows) {
+              box.appendChild(el('div', 'item-sub', sub ? `${main} — ${sub}` : main));
+            }
+          }
+          list.appendChild(box);
+        }
+        panel.appendChild(list);
+        return;
+      }
+
+      if (activeTab === 'episodes') {
+        const entries = Object.entries(profile.episodeOverrides || {});
+        if (!entries.length) { panel.appendChild(el('div', 'muted', 'No episode overrides synced yet.')); return; }
+        const list = el('div', 'list');
+        for (const [k, v] of entries) {
+          const item = el('div', 'item');
+          item.appendChild(el('div', 'item-title', v ? 'Watched' : 'Unwatched'));
+          item.appendChild(el('div', 'item-sub', k));
+          list.appendChild(item);
+        }
+        panel.appendChild(list);
+        return;
+      }
+
+      panel.appendChild(el('pre', '', JSON.stringify(profile, null, 2)));
+    }
+
+    $('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('loginError').textContent = '';
+      const username = $('username').value.trim();
+      const password = $('password').value;
+      const res = await fetch('/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, createIfMissing: false }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.token) {
+        $('loginError').textContent = body.error || 'Sign in failed.';
+        return;
+      }
+      localStorage.setItem(TOKEN_KEY, body.token);
+      localStorage.setItem(USER_KEY, body.username || username);
+      $('password').value = '';
+      await loadProfile();
+    });
+
+    $('tabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-tab]');
+      if (!btn) return;
+      activeTab = btn.dataset.tab;
+      for (const b of $('tabs').querySelectorAll('button')) {
+        b.classList.toggle('active', b === btn);
+      }
+      renderTab();
+    });
+
+    $('refreshBtn').addEventListener('click', loadProfile);
+    $('logoutBtn').addEventListener('click', () => {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      profile = {};
+      showLogin();
+    });
+    $('downloadBtn').addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `skystream-profile-${localStorage.getItem(USER_KEY) || 'backup'}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    loadProfile();
+  </script>
+</body>
+</html>

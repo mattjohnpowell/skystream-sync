@@ -3,9 +3,12 @@ import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { mergeProfiles } from './merge.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DASHBOARD_HTML = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -65,6 +68,10 @@ function getUserFromHeader(req) {
   return db.prepare('SELECT * FROM users WHERE token = ?').get(token);
 }
 
+fastify.get('/', async (_req, reply) => {
+  return reply.type('text/html; charset=utf-8').send(DASHBOARD_HTML);
+});
+
 fastify.get('/health', async () => ({ ok: true }));
 
 fastify.post('/v1/auth/register', async (req, reply) => {
@@ -97,7 +104,12 @@ fastify.post('/v1/auth/login', async (req, reply) => {
     .prepare('SELECT * FROM users WHERE username = ?')
     .get(credentials.username);
 
-  if (!user) return createUser(credentials.username, credentials.password);
+  if (!user) {
+    if (req.body?.createIfMissing === false) {
+      return reply.code(401).send({ error: 'Invalid username or password.' });
+    }
+    return createUser(credentials.username, credentials.password);
+  }
 
   if (!passwordsMatch(credentials.password, user.salt, user.password_hash)) {
     return reply.code(401).send({ error: 'Invalid username or password.' });
