@@ -9,7 +9,7 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY merge.js server.js ./
+COPY merge.js server.js dashboard.html ./
 
 ENV DATA_DIR=/app/data
 EXPOSE 8787
