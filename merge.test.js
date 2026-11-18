@@ -60,3 +60,86 @@ test('extension lists union by identity and replace when asked', () => {
   ]);
   assert.deepEqual(replaced.stremioAddons, []);
 });
+
+test('history deletion tombstones drop stale watches and revive on newer watch', () => {
+  const afterDelete = mergeProfiles(
+    JSON.stringify({
+      history: [
+        { key: 'show', entry: { timestamp: 100, position: 50 } },
+        { key: 'other', entry: { timestamp: 100, position: 10 } },
+      ],
+    }),
+    {
+      replaceHistory: true,
+      updatedAt: 200,
+      history: [{ key: 'other', entry: { timestamp: 100, position: 10 } }],
+      deletedHistoryTimestamps: { show: 200 },
+    },
+  );
+
+  assert.deepEqual(
+    afterDelete.history.map((h) => h.key),
+    ['other'],
+  );
+  assert.equal(afterDelete.deletedHistoryTimestamps.show, 200);
+
+  // Stale watch from offline device (timestamp 150 <= 200) stays deleted.
+  const staleResync = mergeProfiles(JSON.stringify(afterDelete), {
+    history: [{ key: 'show', entry: { timestamp: 150, position: 99 } }],
+  });
+  assert.deepEqual(
+    staleResync.history.map((h) => h.key),
+    ['other'],
+  );
+
+  // Newer watch (timestamp 300 > 200) revives the entry and clears tombstone.
+  const revived = mergeProfiles(JSON.stringify(staleResync), {
+    history: [{ key: 'show', entry: { timestamp: 300, position: 120 } }],
+  });
+  assert.equal(revived.history.length, 2);
+  assert.equal(revived.deletedHistoryTimestamps?.show, undefined);
+});
+
+test('library replacement, deletedLibraryUrls, and settings metadata persist cleanly', () => {
+  const initial = mergeProfiles('{}', {
+    library: [
+      { url: 'https://a', title: 'A' },
+      { url: 'https://b', title: 'B' },
+    ],
+    nuvioRepos: ['https://nuvio.repo/manifest.json'],
+    stremioAddons: ['https://stremio.addon/manifest.json'],
+    activeProviderId: 'com.provider.a',
+    nuvioRepoSettings: {
+      'https://nuvio.repo/manifest.json': { disabled: ['s1'], enabled: ['s2'] },
+    },
+    stremioAddonStates: {
+      'https://stremio.addon/manifest.json': false,
+    },
+    skystreamPlugins: [
+      { packageName: 'com.provider', url: 'https://p.sky' },
+      { packageName: '__skystream_sync_meta__', activeProviderId: 'com.provider.a' },
+    ],
+  });
+
+  assert.equal(initial.skystreamPlugins.length, 1);
+  assert.equal(initial.activeProviderId, 'com.provider.a');
+  assert.deepEqual(initial.nuvioRepoSettings['https://nuvio.repo/manifest.json'], {
+    disabled: ['s1'],
+    enabled: ['s2'],
+  });
+  assert.equal(initial.stremioAddonStates['https://stremio.addon/manifest.json'], false);
+
+  const removed = mergeProfiles(JSON.stringify(initial), {
+    replaceLibrary: true,
+    library: [{ url: 'https://a', title: 'A' }],
+    deletedLibraryUrls: ['https://b'],
+    nuvioRepos: ['https://nuvio.repo/manifest.json'],
+    stremioAddons: ['https://stremio.addon/manifest.json'],
+  });
+
+  assert.deepEqual(
+    removed.library.map((i) => i.url),
+    ['https://a'],
+  );
+  assert.deepEqual(removed.deletedLibraryUrls, ['https://b']);
+});
